@@ -1,0 +1,294 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <fcntl.h>
+#include <string.h>
+#include "fragmenta.h"
+void ejecutar_comando(char **args) {
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        // Proceso hijo
+        execvp(args[0], args);
+        perror("Error al ejecutar el comando");
+        exit(EXIT_FAILURE);
+    } else if (pid > 0) {
+        // Proceso padre
+        waitpid(pid, NULL, 0);
+    } else {
+        perror("Error al crear el proceso hijo");
+    }
+}
+void redireccion_salida(char **args, char *nombre_archivo)
+{
+    int fd = open(nombre_archivo, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+    if (fd == -1)
+    {
+        perror("Error al abrir el archivo de salida");
+        return;
+    }
+    pid_t pid = fork();
+    if (pid == 0)
+    {
+        dup2(fd, STDOUT_FILENO);
+        close(fd);
+        execvp(args[0], args);
+        perror("Error al ejecutar el comando");
+        exit(EXIT_FAILURE);
+    }
+    else if (pid > 0)
+    {
+        wait(NULL);
+        close(fd);
+    }
+    else
+    {
+        perror("Error al crear el proceso hijo");
+        close(fd);
+    }
+}
+void redireccion_anexar(char **args, char *nombre_archivo)
+{
+    int fd = open(nombre_archivo, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+    if (fd == -1)
+    {
+        perror("Error al abrir el archivo de salida (anexar)");
+        return;
+    }
+    pid_t pid = fork();
+    if (pid == 0)
+    {
+        dup2(fd, STDOUT_FILENO);
+        close(fd);
+        execvp(args[0], args);
+        perror("Error al ejecutar el comando");
+        exit(EXIT_FAILURE);
+    }
+    else if (pid > 0)
+    {
+        wait(NULL);
+        close(fd);
+    }
+    else
+    {
+        perror("Error al crear el proceso hijo");
+        close(fd);
+    }
+}
+void redireccion_entrada(char **args, char *nombre_archivo)
+{
+    int fd = open(nombre_archivo, O_RDONLY);
+    if (fd == -1)
+    {
+        perror("Error al abrir el archivo de entrada");
+        return;
+    }
+    pid_t pid = fork();
+    if (pid == 0)
+    {
+        dup2(fd, STDIN_FILENO);
+        close(fd);
+        execvp(args[0], args);
+        perror("Error al ejecutar el comando");
+        exit(EXIT_FAILURE);
+    }
+    else if (pid > 0)
+    {
+        wait(NULL);
+        close(fd);
+    }
+    else
+    {
+        perror("Error al crear el proceso hijo");
+        close(fd);
+    }
+}
+void redireccion_simultanea(char **args, char *nombre_archivo_entrada, char *nombre_archivo_salida)
+ {
+    int fd_in = open(nombre_archivo_entrada, O_RDONLY);
+    int fd_out = open(nombre_archivo_salida, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+    if (fd_in == -1)
+    {
+        perror("Error al abrir el archivo de entrada");
+        return;
+    }
+    if (fd_out == -1)
+    {
+        perror("Error al abrir el archivo de salida");
+        close(fd_in);
+        return;
+    }
+    pid_t pid = fork();
+    if (pid == 0)
+    {
+        dup2(fd_in, STDIN_FILENO);
+        dup2(fd_out, STDOUT_FILENO);
+        close(fd_in);
+        close(fd_out);
+        execvp(args[0], args);
+        perror("Error al ejecutar el comando");
+        exit(EXIT_FAILURE);
+    }
+    else if (pid > 0)
+    {
+        wait(NULL);
+        close(fd_in);
+        close(fd_out);
+    }
+    else
+    {
+        perror("Error al crear el proceso hijo");
+        close(fd_in);
+        close(fd_out);
+    }
+}
+void salida(int x)
+{
+    kill(getppid(), SIGINT);
+    wait(NULL);
+    printf("\n¡Gracias por usar la minishell!\n");
+    exit(1);
+}
+int main() {
+    char *linea = NULL;
+    size_t tamano = 0;
+
+    while (1)
+    {
+        signal(SIGINT, salida);
+        printf("minishell> ");
+
+        if (getline(&linea, &tamano, stdin) == -1) {
+            perror("Error al leer la línea");
+            exit(EXIT_FAILURE);
+        }
+
+        linea[strcspn(linea, "\n")] = 0;
+        char **args = fragmenta(linea);
+        if (args[0] != NULL)
+        {
+            if (strncmp(args[0], "exit", 4) == 0)
+            {
+                printf("¡Gracias por usar la minishell!\n");
+                break;
+            }
+            else
+            {
+                int i = 0;
+                int redirecciones = 0;
+                int pipes = 0;
+                int modo_anexar = 0;
+                char *entrada = NULL;
+                char *salida = NULL;
+                while (args[i] != NULL)
+                {
+                    if (strcmp(args[i], ">") == 0)
+                    {
+                        if (args[i+1] != NULL)
+                        {
+                            salida = args[i+1];
+                            args[i] = NULL;
+                            redirecciones++;
+                        }
+                    }
+                    else if (strcmp(args[i], ">>") == 0) {
+                        if (args[i+1] != NULL) {
+                            salida = args[i+1];
+                            args[i] = NULL;
+                            redirecciones++;
+                            modo_anexar = 1;
+                        }
+                        if (modo_anexar) {
+                            redireccion_anexar(args, salida);
+                        }
+                    }
+                    else if (strcmp(args[i], "<") == 0)
+                    {
+                        if (args[i+1] != NULL)
+                        {
+                            entrada = args[i+1];
+                            args[i] = NULL;
+                            redirecciones++;
+                        }
+                    }
+                    else if (strcmp(args[i], "|") == 0)
+                    {
+                        args[i] = NULL;
+                        int pid, pid2, tuberia [2];
+                        pipe(tuberia);
+                        char **args2;
+                        args2 = (char **)&args[i+1];
+                        pid = fork();
+                        if (pid == 0)
+                        {
+                            close(tuberia[0]);
+                            dup2(tuberia[1], STDOUT_FILENO);
+                            close(tuberia[1]);
+                            execvp(args[0], args);
+                            perror("Error al ejecutar el comando");
+                            exit(EXIT_FAILURE);
+                        }
+                        else
+                        {
+                            pid2 = fork();
+                            if (pid2 == 0)
+                            {
+                                close(tuberia[1]);
+                                dup2(tuberia[0], STDIN_FILENO);
+                                close(tuberia[0]);
+                                execvp(args2[0], args2);
+                                perror("Error al ejecutar el comando");
+                                exit(EXIT_FAILURE);
+                            }
+                            else if (pid2 > 0)
+                            {
+                                close(tuberia[0]);
+                                close(tuberia[1]);
+                                waitpid(pid, NULL, 0);
+                                waitpid(pid2, NULL, 0);
+                            }
+                            else
+                            {
+                                perror("Error al crear el proceso");
+                                exit(EXIT_FAILURE);
+                            }
+                        }
+                    }
+
+                    i++;
+                }
+                if (redirecciones == 0 && pipes == 0)
+                {
+                    ejecutar_comando(args);
+                }
+                if (redirecciones == 1 && pipes == 0)
+                {
+                    if (salida != NULL)
+                    {
+                        redireccion_salida(args, salida);
+                    }
+                    else if (entrada != NULL)
+                    {
+                        redireccion_entrada(args, entrada);
+                    }
+                    if (modo_anexar)
+                    {
+                        redireccion_anexar(args, salida);
+                    }
+                }
+                else if (redirecciones == 2 && pipes == 0)
+                {
+                    if (entrada != NULL && salida != NULL)
+                    {
+                        redireccion_simultanea(args, entrada, salida);
+                    }
+                }
+            }
+            borrarg(args);
+        }
+        free(linea);
+    }
+    return 0;
+}
